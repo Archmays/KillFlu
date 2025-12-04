@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cell Battle: Virus Rush</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&family=Fredoka:wght@400;600&display=swap');
+        
+        :root {
+            /* Fluid Typography: Scales between 12px and 18px based on viewport width */
+            --fluid-base: clamp(12px, 3.5vw, 16px);
+            --fluid-lg: clamp(18px, 5vw, 24px);
+            --fluid-xl: clamp(24px, 8vw, 48px);
+        }
+
+        body {
+            font-family: 'Fredoka', 'Noto Sans SC', sans-serif;
+            background-color: #f0f9ff;
+            user-select: none;
+            overflow: hidden;
+            touch-action: manipulation;
+            font-size: var(--fluid-base); /* Apply base fluid size */
+        }
+
+        /* Animations */
+        .card-enter { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes popIn { from { opacity: 0; transform: scale(0.5) translateY(50px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+        .shake { animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both; }
+        @keyframes shake { 10%, 90% { transform: translate3d(-2px, 0, 0); } 20%, 80% { transform: translate3d(4px, 0, 0); } 30%, 50%, 70% { transform: translate3d(-6px, 0, 0); } 40%, 60% { transform: translate3d(6px, 0, 0); } }
+
+        .math-popup { animation: floatUp 1.8s forwards; text-shadow: 2px 2px 0px rgba(255,255,255,0.8); }
+        @keyframes floatUp { 0% { opacity: 0; transform: translate(-50%, 20px) scale(0.5); } 20% { opacity: 1; transform: translate(-50%, 0) scale(1.2); } 80% { opacity: 1; transform: translate(-50%, -60px) scale(1); } 100% { opacity: 0; transform: translate(-50%, -80px) scale(0.8); } }
+
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .discard-pulse { animation: pulseRed 1.5s infinite; }
+        @keyframes pulseRed { 0%, 100% { border-color: transparent; } 50% { border-color: #ef4444; box-shadow: 0 0 10px #ef4444; } }
+
+        /* Custom Text Classes for finer control */
+        .text-fluid-base { font-size: var(--fluid-base); }
+        .text-fluid-lg { font-size: var(--fluid-lg); }
+        .text-fluid-xl { font-size: var(--fluid-xl); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = window.React;
+
+        // --- Sound Engine ---
+        const SFX = {
+            ctx: null,
+            init: () => {
+                if (!SFX.ctx) SFX.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                if (SFX.ctx.state === 'suspended') SFX.ctx.resume();
+            },
+            play: (type) => {
+                if (!SFX.ctx) return;
+                const t = SFX.ctx.currentTime;
+                const osc = SFX.ctx.createOscillator();
+                const gain = SFX.ctx.createGain();
+                osc.connect(gain);
+                gain.connect(SFX.ctx.destination);
+
+                switch (type) {
+                    case 'click':
+                        osc.type = 'sine'; osc.frequency.setValueAtTime(600, t); osc.frequency.exponentialRampToValueAtTime(300, t + 0.1);
+                        gain.gain.setValueAtTime(0.1, t); gain.gain.linearRampToValueAtTime(0, t + 0.1);
+                        osc.start(t); osc.stop(t + 0.1); break;
+                    case 'buy': // Cash register sound
+                        osc.type = 'square'; osc.frequency.setValueAtTime(1200, t); osc.frequency.setValueAtTime(1600, t+0.1);
+                        gain.gain.setValueAtTime(0.1, t); gain.gain.linearRampToValueAtTime(0, t + 0.3);
+                        osc.start(t); osc.stop(t + 0.3); break;
+                    case 'heal':
+                        osc.type = 'triangle'; osc.frequency.setValueAtTime(400, t); osc.frequency.linearRampToValueAtTime(800, t + 0.3);
+                        gain.gain.setValueAtTime(0.1, t); gain.gain.linearRampToValueAtTime(0, t + 0.4);
+                        osc.start(t); osc.stop(t + 0.4); break;
+                    case 'attack':
+                        osc.type = 'square'; osc.frequency.setValueAtTime(150, t); osc.frequency.exponentialRampToValueAtTime(40, t + 0.2);
+                        gain.gain.setValueAtTime(0.1, t); gain.gain.linearRampToValueAtTime(0, t + 0.2);
+                        osc.start(t); osc.stop(t + 0.2); break;
+                    case 'damage':
+                        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(100, t); osc.frequency.linearRampToValueAtTime(50, t + 0.3);
+                        gain.gain.setValueAtTime(0.1, t); gain.gain.linearRampToValueAtTime(0, t + 0.3);
+                        osc.start(t); osc.stop(t + 0.3); break;
+                    case 'dice':
+                        osc.type = 'square'; osc.frequency.setValueAtTime(800, t);
+                        gain.gain.setValueAtTime(0.05, t); gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+                        osc.start(t); osc.stop(t + 0.05); break;
+                    case 'win':
+                        [0, 0.1, 0.2, 0.4].forEach((d, i) => {
+                            const o = SFX.ctx.createOscillator(); const g = SFX.ctx.createGain();
+                            o.connect(g); g.connect(SFX.ctx.destination);
+                            o.type = 'triangle'; o.frequency.value = [523.25, 659.25, 783.99, 1046.50][i];
+                            g.gain.setValueAtTime(0.1, t + d); g.gain.linearRampToValueAtTime(0, t + d + 0.3);
+                            o.start(t + d); o.stop(t + d + 0.3);
+                        }); break;
+                    case 'lose':
+                        [0, 0.3].forEach((d, i) => {
+                            const o = SFX.ctx.createOscillator(); const g = SFX.ctx.createGain();
+                            o.connect(g); g.connect(SFX.ctx.destination);
+                            o.type = 'sawtooth'; o.frequency.value = [300, 210][i];
+                            g.gain.setValueAtTime(0.1, t + d); g.gain.linearRampToValueAtTime(0, t + d + 0.5);
+                            o.start(t + d); o.stop(t + d + 0.5);
+                        }); break;
+                }
+            }
+        };
+
+        // --- Data ---
+        const CHARACTERS = [
+            { id: 'xiaoyue', name: '黄小越', name_en: 'Xiaoyue', icon: '👧', color: 'bg-pink-100 border-pink-300', text_color: 'text-pink-600', desc_zh: '坚韧型 (HP+10)', desc_en: 'Tank Type (HP+10)', bonus_hp: 10, bonus_vp: 0 },
+            { id: 'xiaoyi', name: '黄小翊', name_en: 'Xiaoyi', icon: '👦', color: 'bg-blue-100 border-blue-300', text_color: 'text-blue-600', desc_zh: '敏捷型 (VP-6)', desc_en: 'Speed Type (VP-6)', bonus_hp: 0, bonus_vp: -6 },
+            { id: 'dingding', name: '丁丁', name_en: 'Dingding', icon: '👓', color: 'bg-teal-100 border-teal-300', text_color: 'text-teal-600', desc_zh: '小博士 (VP-9, HP-5)', desc_en: 'Smart (VP-9, HP-5)', bonus_hp: -5, bonus_vp: -9 },
+            { id: 'zhuangzhuang', name: '壮壮', name_en: 'Zhuang', icon: '💪', color: 'bg-orange-100 border-orange-300', text_color: 'text-orange-600', desc_zh: '运动派 (HP+5, VP-3)', desc_en: 'Balanced (HP+5, VP-3)', bonus_hp: 5, bonus_vp: -3 }
+        ];
+
+        const LEVELS = [
+            { id: 1, name_en: 'Common Cold', name_zh: '普通感冒', pHP: 50, pVP: 30, cHP: 40, cVP: 30, color: 'bg-green-100', bossIcon: '🤧', reward: 20 },
+            { id: 2, name_en: 'Seasonal Flu', name_zh: '季节性流感', pHP: 50, pVP: 40, cHP: 50, cVP: 40, color: 'bg-yellow-100', bossIcon: '🤒', reward: 30 },
+            { id: 3, name_en: 'Super Virus', name_zh: '超级变异株', pHP: 40, pVP: 50, cHP: 60, cVP: 50, color: 'bg-red-100', bossIcon: '👿', reward: 50 },
+        ];
+
+        // NEW: Upgrades (Shop Items)
+        const SHOP_ITEMS = [
+            { id: 'vaccine', name_en: 'Vaccine Shot', name_zh: '疫苗接种', icon: '💉', cost: 30, desc_en: 'Start VP -5', desc_zh: '初始病毒 -5', type: 'vp_bonus', val: 5 },
+            { id: 'nutrition', name_en: 'Nutrition Meal', name_zh: '营养大餐', icon: '🥦', cost: 30, desc_en: 'Max HP +10', desc_zh: '最大血量 +10', type: 'hp_bonus', val: 10 },
+            { id: 'lucky', name_en: 'Lucky Dice', name_zh: '幸运护符', icon: '🍀', cost: 50, desc_en: 'Roll 6 = Heal', desc_zh: '掷出6点回血', type: 'luck', val: 1 },
+        ];
+
+        const MAX_HAND = 5;
+
+        const CARD_TYPES = [
+            { id: 'macrophage', name_zh: '巨噬细胞', name_en: 'Macrophage', type: 'immune', color: 'bg-blue-100 border-blue-500 text-blue-900', cost_hp: 0, effect_vp: -5, desc_zh: '吞噬病毒', desc_en: 'Virus -5' },
+            { id: 't_cell', name_zh: '杀手T细胞', name_en: 'Killer T-Cell', type: 'immune', color: 'bg-blue-200 border-blue-600 text-blue-900', cost_hp: 5, effect_vp: -15, desc_zh: '强力攻击', desc_en: 'Virus -15, HP -5' },
+            { id: 'antibody', name_zh: '抗体', name_en: 'Antibody', type: 'immune', color: 'bg-indigo-100 border-indigo-500 text-indigo-900', cost_hp: 0, effect_vp: -20, condition: (vp) => vp <= 15, desc_zh: '终极武器', desc_en: 'Virus -20 (If VP≤15)' },
+            { id: 'water', name_zh: '多喝水', name_en: 'Drink Water', type: 'strategy', color: 'bg-emerald-100 border-emerald-500 text-emerald-900', cost_hp: -5, effect_vp: 0, desc_zh: '补充水分', desc_en: 'HP +5' },
+            { id: 'fever', name_zh: '发烧', name_en: 'Fever', type: 'strategy', color: 'bg-orange-100 border-orange-500 text-orange-900', cost_hp: 10, effect_vp: -15, desc_zh: '高温杀毒', desc_en: 'Virus -15, HP -10' },
+            { id: 'mask', name_zh: '戴口罩', name_en: 'Wear Mask', type: 'strategy', color: 'bg-gray-100 border-gray-500 text-gray-800', cost_hp: 0, effect_vp: -2, effect_enemy_vp: 5, desc_zh: '防护', desc_en: 'My VP -2, Rival VP +5' },
+            { id: 'replicate', name_zh: '病毒复制', name_en: 'Replicate', type: 'virus', color: 'bg-red-100 border-red-500 text-red-900', cost_hp: 0, effect_vp: 10, is_attack: true, desc_zh: '坏消息', desc_en: 'Rival VP +10' },
+        ];
+
+        // --- Components ---
+
+        const MathPopup = ({ equation }) => {
+            if (!equation) return null;
+            return (
+                <div className="fixed top-1/3 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[60] pointer-events-none w-full text-center">
+                    <div className="math-popup inline-block bg-yellow-400 text-yellow-900 font-black text-fluid-lg px-6 py-3 rounded-full shadow-[0_10px_20px_rgba(0,0,0,0.3)] border-4 border-white whitespace-nowrap">
+                        {equation}
+                    </div>
+                </div>
+            );
+        };
+
+        const ProgressBar = ({ current, max, color, label, icon }) => {
+            const pct = Math.max(0, Math.min(100, (current / max) * 100));
+            return (
+                <div className="w-full mb-2">
+                    <div className="flex justify-between items-end mb-0.5 px-1 text-xs md:text-sm font-bold opacity-80">
+                        <span className="flex items-center gap-1">{icon} {label}</span>
+                        <span>{current}/{max}</span>
+                    </div>
+                    <div className="h-3 md:h-5 bg-white rounded-full border border-black/10 overflow-hidden relative shadow-inner">
+                        <div className={`h-full ${color} transition-all duration-500`} style={{ width: `${pct}%` }}></div>
+                        <div className="absolute right-0 top-0 bottom-0 w-px bg-black/10"></div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Card = ({ data, onClick, disabled, isDiscardMode }) => {
+            return (
+                <div 
+                    onClick={!disabled ? onClick : null}
+                    className={`
+                        relative w-[24vw] md:w-32 h-[34vw] md:h-44 rounded-xl border-b-4 border-r-4 p-2 flex flex-col justify-between select-none transition-all flex-shrink-0 bg-white
+                        ${data.color}
+                        ${disabled ? 'opacity-40 grayscale cursor-not-allowed' : 'active:scale-95 cursor-pointer shadow-lg'}
+                        ${!disabled && isDiscardMode ? 'discard-pulse border-red-400' : ''}
+                    `}
+                >
+                    {isDiscardMode && !disabled && (
+                        <div className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 md:w-6 md:h-6 flex items-center justify-center text-xs font-bold z-10 shadow-sm">🗑️</div>
+                    )}
+                    <div className="text-center border-b border-black/5 pb-1">
+                        <div className="font-bold text-xs md:text-sm leading-tight truncate">{data.name_en}</div>
+                        <div className="text-[10px] opacity-70 truncate">{data.name_zh}</div>
+                    </div>
+                    <div className="flex-1 flex flex-col items-center justify-center text-center">
+                         <div className="text-xl md:text-2xl mb-1">{data.type === 'immune' ? '🛡️' : data.type === 'virus' ? '🦠' : '💊'}</div>
+                         <div className="text-[10px] md:text-xs font-bold leading-tight px-1 text-gray-700">{data.desc_en}</div>
+                         <div className="text-[8px] md:text-[10px] text-gray-500">{data.desc_zh}</div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main Logic ---
+
+        const App = () => {
+            const [view, setView] = useState('menu'); 
+            const [levelIdx, setLevelIdx] = useState(0); 
+            
+            // Persistent State (Simulated)
+            const [unlockedLevel, setUnlockedLevel] = useState(0);
+            const [dna, setDna] = useState(0);
+            const [upgrades, setUpgrades] = useState({}); // { vaccine: true, nutrition: true }
+
+            const [playerChar, setPlayerChar] = useState(CHARACTERS[0]); 
+
+            // Game State
+            const [turn, setTurn] = useState('player'); 
+            const [phase, setPhase] = useState('start');
+            const [pHP, setPHP] = useState(50);
+            const [pVP, setPVP] = useState(30);
+            const [cHP, setCHP] = useState(50);
+            const [cVP, setCVP] = useState(30);
+            const [pHand, setPHand] = useState([]);
+            
+            const [logs, setLogs] = useState([]);
+            const [diceVal, setDiceVal] = useState(null);
+            const [rolling, setRolling] = useState(false);
+            const [mathEq, setMathEq] = useState(null);
+            const [result, setResult] = useState(null);
+            const [discardMode, setDiscardMode] = useState(false);
+
+            const logRef = useRef(null);
+
+            // Load Progress
+            useEffect(() => {
+                const saved = localStorage.getItem('cell_battle_save');
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    setUnlockedLevel(data.unlockedLevel || 0);
+                    setDna(data.dna || 0);
+                    setUpgrades(data.upgrades || {});
+                }
+            }, []);
+
+            // Save Progress
+            useEffect(() => {
+                const data = { unlockedLevel, dna, upgrades };
+                localStorage.setItem('cell_battle_save', JSON.stringify(data));
+            }, [unlockedLevel, dna, upgrades]);
+
+            const initAudio = () => SFX.init();
+
+            useEffect(() => {
+                if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+            }, [logs]);
+
+            const triggerMath = (eq) => {
+                setMathEq(null);
+                setTimeout(() => setMathEq(eq), 50);
+            };
+
+            const addLog = (text) => setLogs(prev => [...prev, text]);
+
+            const buyUpgrade = (item) => {
+                if (dna >= item.cost && !upgrades[item.id]) {
+                    SFX.play('buy');
+                    setDna(prev => prev - item.cost);
+                    setUpgrades(prev => ({ ...prev, [item.id]: true }));
+                } else {
+                    SFX.play('damage'); // Error sound
+                }
+            };
+
+            const initLevel = (idx) => {
+                initAudio();
+                SFX.play('click');
+                const cfg = LEVELS[idx];
+                setLevelIdx(idx);
+                
+                // --- Apply Upgrades & Character Bonuses ---
+                const hpBonus = (playerChar.bonus_hp || 0) + (upgrades.nutrition ? 10 : 0);
+                const vpBonus = (playerChar.bonus_vp || 0) - (upgrades.vaccine ? 5 : 0);
+                
+                const startHP = cfg.pHP + hpBonus;
+                const startVP = Math.max(1, cfg.pVP + vpBonus);
+                
+                setPHP(startHP); 
+                setPVP(startVP); 
+                setCHP(cfg.cHP); 
+                setCVP(cfg.cVP);
+                
+                setPHand([]); 
+                setLogs([
+                    `${playerChar.name_en} joined!`, 
+                    `Level ${idx+1}: ${cfg.name_en} started!`
+                ]);
+                setTurn('player'); setPhase('start');
+                setDiscardMode(false);
+                setResult(null);
+                setView('playing');
+                drawCards(4);
+            };
+
+            const drawCards = (count) => {
+                const newCards = [];
+                for(let i=0; i<count; i++) {
+                    const rand = Math.random();
+                    let pool;
+                    if (rand < 0.40) pool = CARD_TYPES.filter(x => x.type === 'immune' && x.id !== 'antibody');
+                    else if (rand < 0.50) pool = CARD_TYPES.filter(x => x.id === 'antibody');
+                    else if (rand < 0.85) pool = CARD_TYPES.filter(x => x.type === 'strategy');
+                    else pool = CARD_TYPES.filter(x => x.type === 'virus');
+                    
+                    if (!pool || pool.length === 0) pool = [CARD_TYPES[0]];
+                    const c = pool[Math.floor(Math.random() * pool.length)];
+                    newCards.push({...c, uid: Math.random()});
+                }
+                setPHand(prev => [...prev, ...newCards].slice(0, MAX_HAND));
+            };
+
+            const rollDice = () => {
+                if (rolling) return;
+                initAudio();
+                setRolling(true);
+                setPhase('dice');
+                let count = 0;
+                const iv = setInterval(() => {
+                    SFX.play('dice');
+                    setDiceVal(Math.floor(Math.random()*6)+1);
+                    count++;
+                    if(count > 8) {
+                        clearInterval(iv);
+                        setRolling(false);
+                        const final = Math.floor(Math.random()*6)+1;
+                        setDiceVal(final);
+                        resolveDice(final);
+                    }
+                }, 80);
+            };
+
+            const resolveDice = (val) => {
+                // Lucky Charm Perk: Roll 6 = Heal 5
+                if (upgrades.lucky && val === 6) {
+                    SFX.play('heal');
+                    addLog(`🍀 Lucky 6! Heal 5 HP! (幸运6! 回复5血)`);
+                    setPHP(prev => {
+                         // Simple cap check
+                         const maxHP = LEVELS[levelIdx].pHP + (playerChar.bonus_hp || 0) + (upgrades.nutrition ? 10 : 0);
+                         const next = Math.min(prev + 5, maxHP);
+                         triggerMath(`HP + 5 = ${next}`);
+                         return next;
+                    });
+                } else if(val <= 2) {
+                    SFX.play('damage');
+                    addLog(`🎲 ${val}: Virus Spreads! (+5 VP)`);
+                    if(turn === 'player') {
+                        setPVP(prev => {
+                            triggerMath(`${prev} + 5 = ${prev+5}`);
+                            return prev + 5;
+                        });
+                    } else {
+                        setCVP(prev => prev + 5);
+                    }
+                } else {
+                    SFX.play('heal');
+                    addLog(`🎲 ${val}: Safe.`);
+                }
+                setTimeout(() => setPhase('action'), 1000);
+            };
+
+            const playCard = (card, idx) => {
+                if(turn !== 'player' || phase !== 'action') return;
+                initAudio();
+                
+                if (discardMode) {
+                    const newHand = [...pHand];
+                    newHand.splice(idx, 1);
+                    setPHand(newHand);
+                    addLog(`🗑️ Discarded ${card.name_en}`);
+                    SFX.play('click');
+                    setDiscardMode(false);
+                    return;
+                }
+
+                if(card.condition && !card.condition(pVP)) {
+                    addLog(`⚠️ Condition not met!`);
+                    SFX.play('damage');
+                    return;
+                }
+
+                const newHand = [...pHand];
+                newHand.splice(idx, 1);
+                setPHand(newHand);
+
+                let delay = 0;
+
+                if (card.cost_hp < 0) SFX.play('heal');
+                else if (card.is_attack || card.effect_enemy_vp) SFX.play('attack');
+                else SFX.play('click');
+
+                if(card.cost_hp !== 0) {
+                    setPHP(prev => {
+                        let next = prev - card.cost_hp; 
+                        const maxHP = LEVELS[levelIdx].pHP + (playerChar.bonus_hp || 0) + (upgrades.nutrition ? 10 : 0);
+                        let hitCap = false;
+
+                        if (card.cost_hp < 0) {
+                             if (next > maxHP) {
+                                 next = maxHP;
+                                 hitCap = true;
+                             }
+                        }
+                        
+                        const op = card.cost_hp > 0 ? '-' : '+';
+                        const mathStr = hitCap 
+                            ? `HP: ${prev} ${op} ${Math.abs(card.cost_hp)} = ${next} (MAX)`
+                            : `HP: ${prev} ${op} ${Math.abs(card.cost_hp)} = ${next}`;
+                            
+                        triggerMath(mathStr);
+                        return next;
+                    });
+                    delay = 1200; 
+                }
+
+                if(card.effect_vp !== 0) {
+                    setTimeout(() => {
+                        setPVP(prev => {
+                            const next = Math.max(0, prev + card.effect_vp);
+                            const op = card.effect_vp > 0 ? '+' : '-';
+                            triggerMath(`VP: ${prev} ${op} ${Math.abs(card.effect_vp)} = ${next}`);
+                            return next;
+                        });
+                    }, delay);
+                }
+
+                if(card.is_attack || card.effect_enemy_vp) {
+                    const dmg = card.effect_enemy_vp || card.effect_vp;
+                    setCVP(prev => prev + dmg);
+                    addLog(`⚔️ Attacked Rival!`);
+                } else {
+                    addLog(`✨ Used ${card.name_en}`);
+                }
+
+                setTimeout(checkWin, delay + 500);
+            };
+
+            useEffect(() => {
+                if(turn === 'cpu' && phase === 'action' && view === 'playing') {
+                    const cpuAct = async () => {
+                        await new Promise(r => setTimeout(r, 1500));
+                        const aggro = levelIdx === 2 ? 0.7 : 0.4;
+                        
+                        if(Math.random() > aggro && cVP > 10) {
+                            setCVP(prev => prev - 10);
+                            setCHP(prev => prev - 2);
+                            SFX.play('heal');
+                            addLog(`🤖 Rival healed. (-10 VP)`);
+                        } else {
+                            setPVP(prev => {
+                                const next = prev + 10;
+                                triggerMath(`VP: ${prev} + 10 = ${next}`);
+                                return next;
+                            });
+                            SFX.play('damage');
+                            addLog(`🤖 Rival attacked! (+10 VP)`);
+                        }
+                        checkWin();
+                        await new Promise(r => setTimeout(r, 1500));
+                        endTurn();
+                    };
+                    cpuAct();
+                }
+            }, [turn, phase]);
+
+            useEffect(() => {
+                if(turn === 'cpu' && phase === 'start' && view === 'playing') rollDice();
+            }, [turn, phase]);
+
+            const endTurn = () => {
+                setDiscardMode(false);
+                if(pHP <= 0) {
+                    setPHP(20);
+                    SFX.play('heal');
+                    addLog("🚑 Emergency! HP reset to 20.");
+                }
+                if(turn === 'player') {
+                    setTurn('cpu'); setPhase('start');
+                } else {
+                    setTurn('player'); setPhase('start');
+                    drawCards(2);
+                    addLog("--- Your Turn ---");
+                }
+            };
+
+            const checkWin = () => {};
+
+            useEffect(() => {
+                if(view !== 'playing') return;
+                if(pVP <= 0) {
+                    setResult('won');
+                    setView('result');
+                    SFX.play('win');
+                    // Add Rewards
+                    const reward = LEVELS[levelIdx].reward || 10;
+                    setDna(prev => prev + reward);
+                    
+                    if(levelIdx === unlockedLevel && levelIdx < 2) {
+                        setUnlockedLevel(prev => prev + 1);
+                    }
+                } else if(cVP <= 0) {
+                    setResult('lost');
+                    setView('result');
+                    SFX.play('lose');
+                    // Pity Reward
+                    setDna(prev => prev + 5);
+                }
+            }, [pVP, cVP]);
+
+
+            // --- VIEWS ---
+
+            if (view === 'menu') {
+                return (
+                    <div className="h-screen w-full flex flex-col items-center justify-center bg-blue-50 p-6 overflow-y-auto">
+                        <div className="text-fluid-xl mb-4 animate-bounce">🧬</div>
+                        <h1 className="text-fluid-xl font-black text-blue-900 mb-2 text-center">CELL BATTLE</h1>
+                        <p className="text-gray-500 mb-8 font-bold text-fluid-base">Virus Rush: Roguelite</p>
+                        
+                        <div className="w-full max-w-md space-y-4">
+                            <button onClick={() => { initAudio(); setView('char_select'); SFX.play('click'); }} className="w-full py-4 bg-green-500 text-white rounded-2xl font-bold text-fluid-lg shadow-lg active:scale-95 transition-transform">
+                                START GAME (开始)
+                            </button>
+                            <button onClick={() => { initAudio(); setView('shop'); SFX.play('click'); }} className="w-full py-4 bg-purple-500 text-white rounded-2xl font-bold text-fluid-lg shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2">
+                                <span>🧪</span> LAB SHOP (实验室)
+                            </button>
+                            <button onClick={() => { initAudio(); setView('rules'); SFX.play('click'); }} className="w-full py-4 bg-white text-blue-600 rounded-2xl font-bold text-fluid-lg shadow-md border-2 border-blue-100 active:scale-95">
+                                RULES (规则)
+                            </button>
+                        </div>
+                        <div className="mt-8 text-sm font-bold text-gray-400">DNA: {dna} 🧬</div>
+                    </div>
+                );
+            }
+
+            if (view === 'shop') {
+                return (
+                    <div className="h-screen w-full flex flex-col items-center p-6 bg-purple-50 overflow-y-auto">
+                        <div className="flex justify-between w-full max-w-md items-center mb-6 mt-4">
+                            <h2 className="text-fluid-xl font-black text-purple-900">LAB (实验室)</h2>
+                            <div className="bg-white px-3 py-1 rounded-full shadow font-bold text-purple-600 border-2 border-purple-200">
+                                {dna} 🧬
+                            </div>
+                        </div>
+
+                        <div className="w-full max-w-md space-y-4 mb-8">
+                            {SHOP_ITEMS.map(item => {
+                                const bought = upgrades[item.id];
+                                const affordable = dna >= item.cost;
+                                return (
+                                    <button 
+                                        key={item.id}
+                                        onClick={() => buyUpgrade(item)}
+                                        disabled={bought || !affordable}
+                                        className={`w-full p-4 rounded-3xl border-4 text-left relative transition-all active:scale-95 shadow-md flex items-center gap-4
+                                            ${bought ? 'bg-gray-100 border-gray-300 opacity-70' : affordable ? 'bg-white border-purple-400' : 'bg-gray-50 border-gray-200 opacity-50'}
+                                        `}
+                                    >
+                                        <div className="text-4xl bg-purple-100 rounded-full w-14 h-14 flex items-center justify-center border-2 border-purple-200 shrink-0">
+                                            {item.icon}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="font-bold text-purple-900">{item.name_en}</div>
+                                            <div className="text-xs text-gray-500">{item.name_zh}</div>
+                                            <div className="text-xs font-bold text-purple-600 mt-1">{item.desc_en}</div>
+                                        </div>
+                                        <div className="font-bold">
+                                            {bought ? '✅' : <span className={affordable ? 'text-green-600' : 'text-red-400'}>{item.cost} 🧬</span>}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <button onClick={() => { SFX.play('click'); setView('menu'); }} className="text-gray-400 font-bold px-8 py-2">Back to Menu (返回)</button>
+                    </div>
+                );
+            }
+
+            // ... (char_select view similar to previous, simplified for brevity but kept functional)
+            if (view === 'char_select') {
+                return (
+                    <div className="h-screen w-full flex flex-col items-center p-6 bg-purple-50 overflow-y-auto">
+                        <h2 className="text-fluid-lg font-black text-purple-900 mb-6 mt-6">Select Character (选择角色)</h2>
+                        <div className="w-full max-w-md grid grid-cols-1 gap-4 pb-10">
+                            {CHARACTERS.map((char) => (
+                                <button key={char.id} onClick={() => { SFX.play('click'); setPlayerChar(char); setView('level_select'); }} className={`w-full p-4 rounded-3xl border-4 text-left relative transition-all active:scale-95 shadow-lg flex items-center gap-4 ${char.color}`}>
+                                    <div className="text-4xl bg-white/50 rounded-full w-12 h-12 flex items-center justify-center border-2 border-white shrink-0">{char.icon}</div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className={`text-lg font-bold ${char.text_color}`}>{char.name_en} {char.name}</div>
+                                        <div className="text-xs font-bold bg-white/60 inline-block px-2 py-1 rounded text-gray-700 mt-1">{char.desc_en}</div>
+                                    </div>
+                                    <div className="text-gray-400 text-xl">👉</div>
+                                </button>
+                            ))}
+                        </div>
+                        <div className="fixed bottom-0 left-0 right-0 p-4 bg-purple-50/90 backdrop-blur-sm border-t border-purple-100 flex justify-center">
+                            <button onClick={() => { SFX.play('click'); setView('menu'); }} className="text-gray-400 font-bold px-8 py-2">Back (返回)</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (view === 'level_select') {
+                return (
+                    <div className="h-screen w-full flex flex-col items-center p-6 bg-green-50 overflow-y-auto">
+                        <div className="mt-4 flex items-center gap-2 mb-6 bg-white px-4 py-2 rounded-full shadow-sm">
+                            <span className="text-2xl">{playerChar.icon}</span>
+                            <span className="font-bold text-gray-600">{playerChar.name_en}</span>
+                            <button onClick={() => { SFX.play('click'); setView('char_select'); }} className="text-xs text-blue-500 underline ml-2">Change</button>
+                        </div>
+                        <h2 className="text-fluid-lg font-black text-green-800 mb-6">Select Level (选择关卡)</h2>
+                        <div className="w-full max-w-md space-y-4">
+                            {LEVELS.map((lvl, idx) => (
+                                <button key={lvl.id} onClick={() => initLevel(idx)} disabled={idx > unlockedLevel} className={`w-full p-4 rounded-2xl border-4 text-left relative transition-all active:scale-95 ${idx <= unlockedLevel ? 'bg-white border-green-400 shadow-lg' : 'bg-gray-100 border-gray-300 opacity-60 cursor-not-allowed'}`}>
+                                    <div className="flex justify-between items-center">
+                                        <div>
+                                            <div className="text-lg font-bold text-gray-800">{lvl.id}. {lvl.name_en}</div>
+                                            <div className="text-sm text-gray-500 font-bold">{lvl.name_zh}</div>
+                                        </div>
+                                        <div className="text-3xl">{lvl.bossIcon}</div>
+                                    </div>
+                                    {idx > unlockedLevel && <div className="absolute inset-0 flex items-center justify-center bg-black/10 rounded-xl font-bold text-gray-600">🔒 Locked</div>}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="mt-6 text-sm font-bold text-gray-500">Upgrades Active: {Object.keys(upgrades).length}/3</div>
+                        <button onClick={() => { SFX.play('click'); setView('menu'); }} className="mt-4 text-gray-500 font-bold underline">Back to Menu</button>
+                    </div>
+                );
+            }
+
+            if (view === 'result') {
+                return (
+                    <div className="fixed inset-0 z-50 bg-white/90 backdrop-blur flex flex-col items-center justify-center p-6 text-center">
+                        <div className="text-8xl mb-4">{result === 'won' ? playerChar.icon : '💀'}</div>
+                        <h2 className="text-4xl font-black mb-2">{result === 'won' ? 'VICTORY!' : 'DEFEAT!'}</h2>
+                        <p className="text-xl text-gray-600 mb-4 font-bold">{result === 'won' ? `${playerChar.name_en} Won!` : 'Virus Took Over...'}</p>
+                        <div className="bg-yellow-100 text-yellow-800 px-6 py-2 rounded-full font-black mb-8 border-2 border-yellow-300 shadow-sm animate-bounce">
+                            +{result === 'won' ? LEVELS[levelIdx].reward : 5} DNA 🧬
+                        </div>
+                        <div className="space-y-4 w-full max-w-xs">
+                            <button onClick={() => { SFX.play('click'); setView('shop'); }} className="w-full py-3 bg-purple-500 text-white rounded-2xl font-bold text-lg shadow-md">Go to Shop (实验室) 🧪</button>
+                            <button onClick={() => { SFX.play('click'); setView('level_select'); }} className="w-full py-3 bg-gray-200 text-gray-600 rounded-2xl font-bold text-lg">Exit (退出) 🚪</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (view === 'rules') {
+                return (
+                    <div className="h-screen w-full p-6 bg-white overflow-y-auto">
+                        <h2 className="text-3xl font-bold mb-4">Rules (规则)</h2>
+                        <ul className="space-y-4 text-gray-700 font-medium text-fluid-base">
+                            <li>🎯 <b>Goal:</b> Reduce VP to 0. (病毒清零)</li>
+                            <li>🧬 <b>DNA:</b> Earn points to buy upgrades in Shop! (赚取DNA升级属性)</li>
+                            <li>🎲 <b>Dice:</b> 1-2 = Bad. 3-6 = Safe. (1-2 病毒扩散)</li>
+                        </ul>
+                        <button onClick={() => { SFX.play('click'); setView('menu'); }} className="mt-8 w-full py-3 bg-blue-500 text-white rounded-xl font-bold">Back</button>
+                    </div>
+                );
+            }
+
+            // --- PLAYING VIEW ---
+            const currentLevel = LEVELS[levelIdx];
+            const maxDisplayHP = currentLevel.pHP + (playerChar.bonus_hp||0) + (upgrades.nutrition?10:0);
+
+            return (
+                <div className="h-screen w-full bg-slate-50 relative overflow-hidden flex flex-col">
+                    <MathPopup equation={mathEq} />
+
+                    <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 pb-[340px] w-full max-w-3xl mx-auto">
+                        <div className="flex justify-between items-center mb-4 px-2">
+                            <button onClick={() => { SFX.play('click'); setView('level_select'); }} className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded">EXIT</button>
+                            <div className="text-xs font-bold text-gray-500 uppercase tracking-widest text-right">Lvl {levelIdx + 1}: {currentLevel.name_en}</div>
+                        </div>
+
+                        <div className={`p-4 rounded-3xl border-4 border-white shadow-sm mb-4 relative overflow-hidden ${currentLevel.color}`}>
+                            <div className="flex items-center gap-3 relative z-10">
+                                <div className="text-fluid-xl">{currentLevel.bossIcon}</div>
+                                <div className="flex-1">
+                                    <div className="font-bold text-gray-800 text-fluid-base mb-1">Rival (对手)</div>
+                                    <ProgressBar current={cHP} max={60} color="bg-green-500" label="HP" icon="❤️" />
+                                    <ProgressBar current={cVP} max={60} color="bg-purple-500" label="VP" icon="🦠" />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-2xl shadow-sm border-2 border-slate-100 p-4 mb-4 flex flex-col items-center text-center">
+                            <div className="text-xs font-bold text-gray-400 mb-2 uppercase tracking-widest">{turn === 'player' ? "Your Turn" : "Rival's Turn"}</div>
+                            
+                            <div className="flex items-center gap-4 w-full mb-3">
+                                <div className={`w-14 h-14 md:w-16 md:h-16 bg-slate-100 rounded-xl flex items-center justify-center text-3xl border-2 border-slate-200 ${rolling ? 'shake' : ''}`}>{diceVal || '🎲'}</div>
+                                <div className="flex-1 space-y-2">
+                                    {turn === 'player' && phase === 'start' && (
+                                        <button onClick={rollDice} className="w-full h-14 md:h-16 bg-yellow-400 text-yellow-900 font-bold rounded-xl shadow-md text-fluid-lg animate-pulse">Roll Dice (掷骰子)</button>
+                                    )}
+                                    {turn === 'player' && phase === 'action' && (
+                                        <div className="flex gap-2">
+                                            <button onClick={() => { SFX.play('click'); setDiscardMode(!discardMode); }} className={`flex-1 h-14 md:h-16 font-bold rounded-xl shadow-sm border-2 flex flex-col items-center justify-center leading-none ${discardMode ? 'bg-red-500 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+                                                <span className="text-fluid-base">{discardMode ? 'Cancel' : 'Discard'}</span>
+                                                <span className="text-[10px] opacity-80">{discardMode ? '取消' : '弃牌'}</span>
+                                            </button>
+                                            <button onClick={() => { SFX.play('click'); endTurn(); }} className="flex-[2] h-14 md:h-16 bg-gray-800 text-white font-bold rounded-xl shadow-md flex flex-col items-center justify-center leading-none">
+                                                <span className="text-fluid-base">End Turn</span>
+                                                <span className="text-[10px] opacity-70 font-normal">结束回合</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                    {turn !== 'player' && <div className="w-full h-16 flex items-center justify-center bg-gray-50 rounded-xl text-gray-400 font-bold italic border-2 border-dashed border-gray-200">Rival is thinking...</div>}
+                                </div>
+                            </div>
+                            <div ref={logRef} className="w-full h-20 bg-slate-50 rounded-lg border border-slate-200 overflow-y-auto p-2 text-left text-xs font-mono text-gray-600 space-y-1">
+                                {logs.map((l, i) => <div key={i} className="border-b border-slate-100 pb-1 last:border-0">{l}</div>)}
+                            </div>
+                        </div>
+
+                        <div className={`p-4 rounded-3xl border-4 border-white shadow-sm relative overflow-hidden ${playerChar.color.replace('border', 'bg').split(' ')[0]}`}>
+                            <div className="flex items-center gap-3 relative z-10">
+                                <div className="text-fluid-xl">{playerChar.icon}</div>
+                                <div className="flex-1">
+                                    <div className={`font-bold text-fluid-base mb-1 ${playerChar.text_color}`}>{playerChar.name_en} (你)</div>
+                                    <ProgressBar current={pHP} max={maxDisplayHP} color="bg-green-500" label="HP" icon="❤️" />
+                                    <ProgressBar current={pVP} max={50} color="bg-blue-500" label="VP" icon="🦠" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="absolute bottom-0 left-0 right-0 bg-white/80 backdrop-blur-md border-t border-white/40 shadow-[0_-5px_20px_rgba(0,0,0,0.05)] z-40 pb-6 pt-2 px-2">
+                        <div className="max-w-3xl mx-auto">
+                            <div className="flex items-center justify-center gap-2 mb-2">
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Your Hand {pHand.length}/{MAX_HAND}</span>
+                                {discardMode && <span className="text-[10px] font-bold text-red-500 animate-pulse uppercase">Select to discard</span>}
+                            </div>
+                            <div className="flex gap-2 overflow-x-auto px-2 pb-2 hide-scrollbar snap-x">
+                                {pHand.length > 0 ? pHand.map((card, i) => (
+                                    <div key={card.uid} className="snap-center card-enter" style={{animationDelay: `${i*0.05}s`}}>
+                                        <Card data={card} onClick={() => playCard(card, i)} disabled={turn !== 'player' || phase !== 'action' || (card.condition && !card.condition(pVP))} isDiscardMode={discardMode} />
+                                    </div>
+                                )) : (
+                                    <div className="w-full h-32 flex items-center justify-center text-gray-400 text-sm italic border-2 border-dashed border-gray-300 rounded-xl">No Cards (End Turn)</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = window.ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
